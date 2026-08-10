@@ -87,6 +87,19 @@ body {
   background: #3a4457;
 }
 
+/* Scroll containers flush against the window edge: the frameless window keeps a
+   ~5px resize border there, which swallows a thin scrollbar. Widen the track and
+   inset the thumb with a transparent border so it stays grabbable. */
+.scrollbar-edge::-webkit-scrollbar {
+  width: 16px;
+}
+
+.scrollbar-edge::-webkit-scrollbar-thumb {
+  border: 4px solid transparent;
+  background-clip: content-box;
+  border-radius: 8px;
+}
+
 /* Drag region for custom title bar */
 .titlebar-drag {
   -webkit-app-region: drag;
