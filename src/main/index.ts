@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage } from "electron";
 import path from "path";
-import { initDatabase, getSetting, checkScoreBackfill } from "./db";
+import { initDatabase, closeDatabase, getSetting, checkScoreBackfill } from "./db";
 import { registerIpcHandlers } from "./ipc-handlers";
 import { startPolling, stopPolling, getStatus, fetchNewGames } from "./lcu";
 import { loadChampionData, loadAugmentData, waitForChampionData } from "./dragon";
@@ -140,6 +140,12 @@ app.on("before-quit", async (event) => {
   } else {
     stopPolling();
   }
+});
+
+// Runs after before-quit has settled, so the final fetch has already written
+// whatever it found by the time the database closes.
+app.on("will-quit", () => {
+  closeDatabase();
 });
 
 app.on("window-all-closed", () => {

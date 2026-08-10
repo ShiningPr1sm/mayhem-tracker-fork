@@ -18,11 +18,41 @@ export function initDatabase() {
   const dbPath = getDbPath();
   db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
+  // NORMAL is the standard companion to WAL: commits stop waiting on an fsync,
+  // which is what makes a several-thousand-game backfill bearable. The only
+  // exposure is losing the most recent commits to an OS crash, and everything
+  // here is re-fetchable from the client.
+  db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
 
   createTables();
+  runMigrations();
+  // After migrations: on a database from before a column existed, the index
+  // covering it can only be built once that column has been added.
+  createIndexes();
+
+  // Backfill bonus augment slots (5+) from raw_json for games stored
+  // when only 4 slots were captured.
+  if (getSetting("augment_slots") !== String(AUGMENT_SLOTS)) {
+    backfillAugmentSlots();
+    setSetting("augment_slots", String(AUGMENT_SLOTS));
+  }
 }
 
+// Checkpoints the WAL and releases the file. Without this a quit leaves the
+// -wal alongside the database to be replayed on next launch.
+export function closeDatabase() {
+  if (!db || !db.open) return;
+  try {
+    db.close();
+  } catch (err) {
+    console.error("Failed to close database:", err);
+  }
+}
+
+// Every table below is declared in its *current* shape, so a new database is
+// correct without running a single migration. Migrations exist only to carry
+// databases created by older versions up to the same shape — see runMigrations.
 function createTables() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS games (
@@ -34,6 +64,7 @@ function createTables() {
       is_remake     INTEGER NOT NULL DEFAULT 0,
       puuid         TEXT NOT NULL DEFAULT '',
       game_version  TEXT,
+      favorite      INTEGER NOT NULL DEFAULT 0,
       raw_json      TEXT
     );
 
@@ -53,6 +84,8 @@ function createTables() {
       gold_earned          INTEGER NOT NULL DEFAULT 0,
       total_heal           INTEGER NOT NULL DEFAULT 0,
       largest_killing_spree INTEGER NOT NULL DEFAULT 0,
+      score                REAL,
+      score_badge          TEXT,
       item0 INTEGER, item1 INTEGER, item2 INTEGER,
       item3 INTEGER, item4 INTEGER, item5 INTEGER, item6 INTEGER
     );
@@ -65,12 +98,13 @@ function createTables() {
     );
 
     CREATE TABLE IF NOT EXISTS summoner (
-      puuid       TEXT PRIMARY KEY,
-      game_name   TEXT,
-      tag_line    TEXT,
-      summoner_id INTEGER,
-      account_id  INTEGER,
-      updated_at  INTEGER NOT NULL
+      puuid        TEXT PRIMARY KEY,
+      game_name    TEXT,
+      tag_line     TEXT,
+      summoner_id  INTEGER,
+      account_id   INTEGER,
+      profile_icon INTEGER,
+      updated_at   INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS settings (
@@ -83,59 +117,131 @@ function createTables() {
     CREATE TABLE IF NOT EXISTS ignored_games (
       game_id INTEGER PRIMARY KEY
     );
+  `);
+}
 
+// Split out from createTables because an index over a migrated-in column can
+// only be built after runMigrations has actually added it.
+function createIndexes() {
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_games_creation ON games(game_creation DESC);
+    CREATE INDEX IF NOT EXISTS idx_games_puuid ON games(puuid);
+    CREATE INDEX IF NOT EXISTS idx_games_version ON games(game_version);
+    CREATE INDEX IF NOT EXISTS idx_games_queue ON games(queue_id);
     CREATE INDEX IF NOT EXISTS idx_player_stats_champion ON player_stats(champion_id);
     CREATE INDEX IF NOT EXISTS idx_game_augments_augment ON game_augments(augment_id);
   `);
+}
 
-  // Migration: add is_remake column to existing databases
-  try {
+// ---- Migrations ----
+//
+// Stamped in PRAGMA user_version. Version 0 means the database predates
+// versioning, so it could be missing any subset of the columns v1 adds — which
+// is why each step checks for its column rather than assuming. A database that
+// createTables just built is also version 0, and lands on the same no-op path.
+const SCHEMA_VERSION = 1;
+
+function tableColumns(table: string): Set<string> {
+  const rows = db.pragma(`table_info(${table})`) as { name: string }[];
+  return new Set(rows.map((r) => r.name));
+}
+
+function runMigrations() {
+  const current = db.pragma("user_version", { simple: true }) as number;
+  if (current >= SCHEMA_VERSION) return;
+
+  if (current < 1) migrateToV1();
+
+  db.pragma(`user_version = ${SCHEMA_VERSION}`);
+}
+
+// Brings pre-versioning databases up to the schema createTables now declares.
+// Each column is added only if absent, so this is a no-op on both new databases
+// and ones already carried forward by the old try/catch migrations.
+function migrateToV1() {
+  const games = tableColumns("games");
+
+  if (!games.has("is_remake")) {
     db.exec("ALTER TABLE games ADD COLUMN is_remake INTEGER NOT NULL DEFAULT 0");
-    // Retroactively detect remakes for existing games
-    const games = db.prepare("SELECT game_id, game_duration, raw_json FROM games").all() as {
-      game_id: number;
-      game_duration: number;
-      raw_json: string | null;
-    }[];
-    const updateStmt = db.prepare("UPDATE games SET is_remake = 1 WHERE game_id = ?");
+    backfillRemakes();
+  }
+
+  if (!games.has("puuid")) {
+    db.exec("ALTER TABLE games ADD COLUMN puuid TEXT NOT NULL DEFAULT ''");
+    backfillGamePuuids();
+  }
+
+  if (!games.has("game_version")) {
+    db.exec("ALTER TABLE games ADD COLUMN game_version TEXT");
+    backfillGameVersions();
+  }
+
+  // Pins games to the top of match history; nothing to backfill.
+  if (!games.has("favorite")) {
+    db.exec("ALTER TABLE games ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // Scores are populated by checkScoreBackfill once champion data has loaded,
+  // so the columns only need to exist here.
+  const playerStats = tableColumns("player_stats");
+  if (!playerStats.has("score")) {
+    db.exec("ALTER TABLE player_stats ADD COLUMN score REAL");
+  }
+  if (!playerStats.has("score_badge")) {
+    db.exec("ALTER TABLE player_stats ADD COLUMN score_badge TEXT");
+  }
+
+  // Remember our own profile icon so the home page can show it
+  if (!tableColumns("summoner").has("profile_icon")) {
+    db.exec("ALTER TABLE summoner ADD COLUMN profile_icon INTEGER");
+  }
+}
+
+// Retroactively detect remakes for games stored before the flag existed
+function backfillRemakes() {
+  const games = db.prepare("SELECT game_id, game_duration, raw_json FROM games").all() as {
+    game_id: number;
+    game_duration: number;
+    raw_json: string | null;
+  }[];
+  const updateStmt = db.prepare("UPDATE games SET is_remake = 1 WHERE game_id = ?");
+  const tx = db.transaction(() => {
     for (const game of games) {
       if (detectRemake(game.game_duration, game.raw_json)) {
         updateStmt.run(game.game_id);
       }
     }
-  } catch {
-    // Column already exists
-  }
+  });
+  tx();
+}
 
-  // Migration: add puuid column to games for multi-account support
-  try {
-    db.exec("ALTER TABLE games ADD COLUMN puuid TEXT NOT NULL DEFAULT ''");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_games_puuid ON games(puuid)");
-    // Backfill puuid by matching stored player_stats against raw_json participants
-    const gamesToBackfill = db
-      .prepare(`
-        SELECT g.game_id, g.raw_json,
-               ps.champion_id, ps.kills, ps.deaths, ps.assists
-        FROM games g
-        JOIN player_stats ps ON g.game_id = ps.game_id
-        WHERE g.puuid = '' AND g.raw_json IS NOT NULL
-      `)
-      .all() as {
-      game_id: number;
-      raw_json: string;
-      champion_id: number;
-      kills: number;
-      deaths: number;
-      assists: number;
-    }[];
+// Recover each game's owner by matching stored player_stats against the
+// raw_json participants, for databases from before multi-account support
+function backfillGamePuuids() {
+  const gamesToBackfill = db
+    .prepare(`
+      SELECT g.game_id, g.raw_json,
+             ps.champion_id, ps.kills, ps.deaths, ps.assists
+      FROM games g
+      JOIN player_stats ps ON g.game_id = ps.game_id
+      WHERE g.puuid = '' AND g.raw_json IS NOT NULL
+    `)
+    .all() as {
+    game_id: number;
+    raw_json: string;
+    champion_id: number;
+    kills: number;
+    deaths: number;
+    assists: number;
+  }[];
 
-    const updateStmt = db.prepare("UPDATE games SET puuid = ? WHERE game_id = ?");
-    const upsertStmt = db.prepare(`
-      INSERT OR IGNORE INTO summoner (puuid, game_name, tag_line, summoner_id, account_id, updated_at)
-      VALUES (?, ?, ?, NULL, NULL, ?)
-    `);
+  const updateStmt = db.prepare("UPDATE games SET puuid = ? WHERE game_id = ?");
+  const upsertStmt = db.prepare(`
+    INSERT OR IGNORE INTO summoner (puuid, game_name, tag_line, summoner_id, account_id, updated_at)
+    VALUES (?, ?, ?, NULL, NULL, ?)
+  `);
 
+  const tx = db.transaction(() => {
     for (const game of gamesToBackfill) {
       try {
         const raw = JSON.parse(game.raw_json);
@@ -173,17 +279,16 @@ function createTables() {
         /* ignore parse errors */
       }
     }
-  } catch {
-    // Column already exists
-  }
+  });
+  tx();
+}
 
-  // Migration: add game_version (patch) column and backfill from raw_json
-  try {
-    db.exec("ALTER TABLE games ADD COLUMN game_version TEXT");
-    const games = db
-      .prepare("SELECT game_id, raw_json FROM games WHERE raw_json IS NOT NULL")
-      .all() as { game_id: number; raw_json: string }[];
-    const updateStmt = db.prepare("UPDATE games SET game_version = ? WHERE game_id = ?");
+function backfillGameVersions() {
+  const games = db
+    .prepare("SELECT game_id, raw_json FROM games WHERE raw_json IS NOT NULL")
+    .all() as { game_id: number; raw_json: string }[];
+  const updateStmt = db.prepare("UPDATE games SET game_version = ? WHERE game_id = ?");
+  const tx = db.transaction(() => {
     for (const game of games) {
       try {
         const raw = JSON.parse(game.raw_json);
@@ -193,38 +298,8 @@ function createTables() {
         /* ignore parse errors */
       }
     }
-  } catch {
-    // Column already exists
-  }
-
-  // Migration: add favorite column for pinning games to the top of match history
-  try {
-    db.exec("ALTER TABLE games ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0");
-  } catch {
-    // Column already exists
-  }
-
-  // Migration: add performance score columns to player_stats
-  try {
-    db.exec("ALTER TABLE player_stats ADD COLUMN score REAL");
-    db.exec("ALTER TABLE player_stats ADD COLUMN score_badge TEXT");
-  } catch {
-    // Columns already exist
-  }
-
-  // Migration: remember our own profile icon so the home page can show it
-  try {
-    db.exec("ALTER TABLE summoner ADD COLUMN profile_icon INTEGER");
-  } catch {
-    // Column already exists
-  }
-
-  // Backfill bonus augment slots (5+) from raw_json for games stored
-  // when only 4 slots were captured.
-  if (getSetting("augment_slots") !== String(AUGMENT_SLOTS)) {
-    backfillAugmentSlots();
-    setSetting("augment_slots", String(AUGMENT_SLOTS));
-  }
+  });
+  tx();
 }
 
 function backfillAugmentSlots() {
