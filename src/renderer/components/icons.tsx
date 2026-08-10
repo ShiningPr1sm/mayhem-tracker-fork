@@ -177,3 +177,19 @@ export function XCircleIcon(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+export function StarIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M11.5 2.3a.6.6 0 0 1 1 0l2.5 5.1 5.6.8a.6.6 0 0 1 .3 1l-4 4 1 5.6a.6.6 0 0 1-.9.6L12 16.7l-5 2.7a.6.6 0 0 1-.9-.6l1-5.6-4.1-4a.6.6 0 0 1 .3-1l5.6-.8Z" />
+    </Icon>
+  );
+}
+
+export function ZapIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" />
+    </Icon>
+  );
+}

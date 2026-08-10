@@ -22,8 +22,17 @@ import MatchScoreboard from "../components/MatchScoreboard";
 import MultikillBadge from "../components/MultikillBadge";
 import StatBars from "../components/StatBars";
 import StatCard from "../components/StatCard";
-import { ArrowDownIcon } from "../components/icons";
-import { formatDuration, formatTimeAgo, formatKDA, kdaRatio, formatPatch } from "../lib/format";
+import SummonerIcon from "../components/SummonerIcon";
+import WinRateBar from "../components/WinRateBar";
+import { ArrowDownIcon, StarIcon, SwordsIcon, ZapIcon } from "../components/icons";
+import {
+  formatDuration,
+  formatTimeAgo,
+  formatKDA,
+  kdaRatio,
+  kdaColor,
+  formatPatch,
+} from "../lib/format";
 import { queueLabel } from "../components/QueueSelect";
 import { scoreColor } from "../../shared/opScore";
 
@@ -100,12 +109,23 @@ export default function MatchHistory() {
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [puuids, setPuuids] = useState<string[] | null>(null);
+  const [profile, setProfile] = useState<{
+    name: string | null;
+    profileIcon: number | null;
+  } | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const lcuStatus = useLcuStatus();
   const backfill = useBackfill();
 
   useEffect(() => {
     window.api.getAllSummonerPuuids().then(setPuuids);
+  }, []);
+
+  // The name and icon can change under us as new games arrive
+  useEffect(() => {
+    const load = () => window.api.getProfile().then(setProfile);
+    load();
+    return window.api.onGamesUpdated(load);
   }, []);
 
   useEffect(() => {
@@ -201,32 +221,80 @@ export default function MatchHistory() {
     dashboard && dashboard.totalGames > 0
       ? (dashboard.totalAssists / dashboard.totalGames).toFixed(1)
       : "0";
-  const winRate =
-    dashboard && dashboard.totalGames > 0
-      ? ((dashboard.wins / dashboard.totalGames) * 100).toFixed(1) + "%"
-      : "0%";
-
-  const losses = dashboard ? dashboard.totalGames - dashboard.wins : 0;
+  const kdaValue =
+    dashboard && dashboard.totalDeaths > 0
+      ? (dashboard.totalKills + dashboard.totalAssists) / dashboard.totalDeaths
+      : Infinity;
+  const totalMultikills = dashboard
+    ? dashboard.multikills.doubles +
+      dashboard.multikills.triples +
+      dashboard.multikills.quadras +
+      dashboard.multikills.pentas
+    : 0;
 
   return (
     <div className="max-w-7xl space-y-4">
       {/* Stat Cards */}
-      {dashboard && (
-        <div className="grid grid-cols-3 gap-4">
+      {dashboard && dashboard.totalGames > 0 && (
+        <div className="grid grid-cols-[minmax(0,1.3fr)_repeat(3,minmax(0,1fr))] gap-4 items-stretch">
+          <ProfileCard profile={profile} dashboard={dashboard} />
+
           <StatCard
-            label="Total Games"
-            value={dashboard.totalGames}
-            subtext={`${dashboard.wins}W ${losses}L · ${winRate} win rate`}
-          />
+            label="Avg Score"
+            accent="gold"
+            icon={<StarIcon className="w-3 h-3" />}
+            value={
+              dashboard.avgScore != null ? (
+                <span className={scoreColor(dashboard.avgScore)}>
+                  {dashboard.avgScore.toFixed(1)}
+                  <span className="text-sm font-semibold text-lol-text/60"> / 10</span>
+                </span>
+              ) : (
+                "—"
+              )
+            }
+            subtext={<ScoreMeter score={dashboard.avgScore} />}
+          >
+            <BadgeCounts
+              mvps={dashboard.mvps}
+              aces={dashboard.aces}
+              scoredWins={dashboard.scoredWins}
+              scoredLosses={dashboard.scoredLosses}
+            />
+          </StatCard>
+
           <StatCard
             label="Avg KDA"
-            value={`${avgKills} / ${avgDeaths} / ${avgAssists}`}
-            subtext={`${kdaRatio(dashboard.totalKills, dashboard.totalDeaths, dashboard.totalAssists)} KDA · ${dashboard.totalKills} / ${dashboard.totalDeaths} / ${dashboard.totalAssists} total`}
-          />
-          <div className="bg-lol-card rounded-xl border border-lol-border/60 p-4">
-            <div className="text-[11px] text-lol-text uppercase tracking-wider mb-1">
-              Multikills
+            accent="sky"
+            icon={<SwordsIcon className="w-3 h-3" />}
+            value={
+              /* Three numbers where the other cards show one — a notch smaller
+                 keeps it on one line in the narrowest column */
+              <span className="text-xl">
+                {avgKills}
+                <Slash />
+                {avgDeaths}
+                <Slash />
+                {avgAssists}
+              </span>
+            }
+            subtext={
+              <span className={kdaColor(kdaValue)}>
+                {kdaRatio(dashboard.totalKills, dashboard.totalDeaths, dashboard.totalAssists)} KDA
+              </span>
+            }
+          >
+            <div className="text-[11px] text-lol-text">
+              {dashboard.totalKills} / {dashboard.totalDeaths} / {dashboard.totalAssists} total
             </div>
+          </StatCard>
+
+          <StatCard
+            label="Multikills"
+            accent="purple"
+            icon={<ZapIcon className="w-3 h-3" />}
+            value={totalMultikills}
+          >
             <div className="grid grid-cols-4 gap-1">
               {(
                 [
@@ -278,13 +346,13 @@ export default function MatchHistory() {
                         : "border-transparent hover:border-lol-border hover:bg-white/5"
                     }`}
                   >
-                    <div className={`text-lg font-bold ${color}`}>{value}</div>
+                    <div className={`text-base font-bold ${color}`}>{value}</div>
                     <div className="text-[10px] text-lol-text">{label}</div>
                   </button>
                 );
               })}
             </div>
-          </div>
+          </StatCard>
         </div>
       )}
 
@@ -421,6 +489,116 @@ export default function MatchHistory() {
           </button>
         </ContextMenu>
       )}
+    </div>
+  );
+}
+
+// The identity half of the top row: who we are, how the record stands, and how
+// the last handful of games went.
+function ProfileCard({
+  profile,
+  dashboard,
+}: {
+  profile: { name: string | null; profileIcon: number | null } | null;
+  dashboard: DashboardData;
+}) {
+  const losses = dashboard.totalGames - dashboard.wins;
+  // Oldest on the left so the strip reads left-to-right in time
+  const pips = dashboard.recentForm.slice().reverse();
+
+  return (
+    <div className="relative flex flex-col gap-3 overflow-hidden bg-lol-card rounded-xl border border-lol-border/60 p-4">
+      <span className="pointer-events-none absolute -top-20 -left-10 h-48 w-64 rounded-full bg-lol-gold/[0.07] blur-3xl" />
+
+      <div className="relative flex items-center gap-3">
+        <SummonerIcon
+          iconId={profile?.profileIcon ?? null}
+          size={40}
+          className="ring-2 ring-lol-gold/30"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-bold text-lol-text-bright truncate">
+            {profile?.name ?? "Summoner"}
+          </div>
+          <div className="text-[11px] text-lol-text truncate">
+            {dashboard.totalGames} {dashboard.totalGames === 1 ? "game" : "games"}
+          </div>
+        </div>
+      </div>
+
+      <div className="relative mt-auto">
+        <div className="flex items-end justify-between gap-3 mb-1.5">
+          <div className="text-2xl font-bold leading-none">
+            <span className="text-lol-win">{dashboard.wins}W</span>{" "}
+            <span className="text-lol-loss/70">{losses}L</span>
+          </div>
+          <div
+            className="flex items-end gap-[3px]"
+            title={`Last ${pips.length} ${pips.length === 1 ? "game" : "games"}`}
+          >
+            {pips.map((g) => (
+              <span
+                key={g.game_id}
+                className={`h-4 w-[5px] rounded-full ${g.win ? "bg-lol-win" : "bg-lol-loss/70"}`}
+              />
+            ))}
+          </div>
+        </div>
+        <WinRateBar wins={dashboard.wins} total={dashboard.totalGames} />
+      </div>
+    </div>
+  );
+}
+
+// Muted separators keep the three averages on one line in a narrow card
+function Slash() {
+  return <span className="text-lol-text/40 mx-0.5">/</span>;
+}
+
+// 0-10 track for the average score, warming up as the score climbs
+function ScoreMeter({ score }: { score: number | null }) {
+  return (
+    <div className="h-1.5 rounded-full bg-lol-border/60 overflow-hidden">
+      <div
+        className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-sky-400 to-lol-gold transition-all"
+        style={{ width: `${Math.min(100, Math.max(0, (score ?? 0) * 10))}%` }}
+      />
+    </div>
+  );
+}
+
+// MVP is the best player on the winning team and ACE the best on the losing
+// one, so each rate is out of the games that could have produced it.
+function BadgeCounts({
+  mvps,
+  aces,
+  scoredWins,
+  scoredLosses,
+}: {
+  mvps: number;
+  aces: number;
+  scoredWins: number;
+  scoredLosses: number;
+}) {
+  const rate = (n: number, of: number) => (of > 0 ? `${((n / of) * 100).toFixed(1)}%` : "—");
+
+  return (
+    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1">
+      <span className="rounded bg-amber-400/20 px-1 text-[9px] font-bold leading-[15px] text-amber-300">
+        MVP
+      </span>
+      <span className="text-xs font-semibold text-lol-text-bright">{mvps}</span>
+      <span className="text-[11px] text-lol-text" title="Share of wins">
+        {rate(mvps, scoredWins)}
+      </span>
+
+      <span className="rounded bg-purple-500/20 px-1 text-[9px] font-bold leading-[15px] text-purple-400">
+        ACE
+      </span>
+      <span className="text-xs font-semibold text-lol-text-bright">{aces}</span>
+      <span className="text-[11px] text-lol-text" title="Share of losses">
+        {rate(aces, scoredLosses)}
+      </span>
     </div>
   );
 }

@@ -212,6 +212,13 @@ function createTables() {
     // Columns already exist
   }
 
+  // Migration: remember our own profile icon so the home page can show it
+  try {
+    db.exec("ALTER TABLE summoner ADD COLUMN profile_icon INTEGER");
+  } catch {
+    // Column already exists
+  }
+
   // Backfill bonus augment slots (5+) from raw_json for games stored
   // when only 4 slots were captured.
   if (getSetting("augment_slots") !== String(AUGMENT_SLOTS)) {
@@ -613,6 +620,9 @@ export function getChampionStatsAll(patch?: string, queue?: number): any[] {
       ROUND(AVG(ps.assists), 1) as avg_assists,
       ROUND(AVG(ps.total_damage_dealt)) as avg_damage,
       ROUND(AVG(ps.gold_earned)) as avg_gold,
+      ROUND(AVG(ps.score), 1) as avg_score,
+      SUM(CASE WHEN ps.score_badge = 'MVP' THEN 1 ELSE 0 END) as mvps,
+      SUM(CASE WHEN ps.score_badge = 'ACE' THEN 1 ELSE 0 END) as aces,
       SUM(ps.double_kills) as double_kills,
       SUM(ps.triple_kills) as triple_kills,
       SUM(ps.quadra_kills) as quadra_kills,
@@ -679,7 +689,12 @@ export function getDashboardData(filters?: {
            SUM(ps.double_kills) as doubles,
            SUM(ps.triple_kills) as triples,
            SUM(ps.quadra_kills) as quadras,
-           SUM(ps.penta_kills) as pentas
+           SUM(ps.penta_kills) as pentas,
+           AVG(ps.score) as avgScore,
+           SUM(CASE WHEN ps.score_badge = 'MVP' THEN 1 ELSE 0 END) as mvps,
+           SUM(CASE WHEN ps.score_badge = 'ACE' THEN 1 ELSE 0 END) as aces,
+           SUM(CASE WHEN ps.score IS NOT NULL AND ps.win = 1 THEN 1 ELSE 0 END) as scoredWins,
+           SUM(CASE WHEN ps.score IS NOT NULL AND ps.win = 0 THEN 1 ELSE 0 END) as scoredLosses
     FROM player_stats ps
     JOIN games g ON ps.game_id = g.game_id
     ${whereSql}
@@ -734,6 +749,11 @@ export function getDashboardData(filters?: {
     totalKills: totals.totalKills ?? 0,
     totalDeaths: totals.totalDeaths ?? 0,
     totalAssists: totals.totalAssists ?? 0,
+    avgScore: totals.avgScore ?? null,
+    mvps: totals.mvps ?? 0,
+    aces: totals.aces ?? 0,
+    scoredWins: totals.scoredWins ?? 0,
+    scoredLosses: totals.scoredLosses ?? 0,
     recentForm,
     topChampions,
     multikills: {
@@ -981,9 +1001,11 @@ export function insertGameFull(gameData: any, puuid: string): boolean {
 }
 
 export function upsertSummoner(summoner: any): void {
+  // REPLACE wipes the row, so keep the stored icon when this update doesn't
+  // carry one (imported summoner rows predate the column)
   db.prepare(`
-    INSERT OR REPLACE INTO summoner (puuid, game_name, tag_line, summoner_id, account_id, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO summoner (puuid, game_name, tag_line, summoner_id, account_id, updated_at, profile_icon)
+    VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT profile_icon FROM summoner WHERE puuid = ?)))
   `).run(
     summoner.puuid,
     summoner.displayName || summoner.gameName || summoner.internalName || summoner.game_name,
@@ -991,11 +1013,52 @@ export function upsertSummoner(summoner: any): void {
     summoner.summonerId ?? summoner.summoner_id,
     summoner.accountId ?? summoner.account_id,
     Date.now(),
+    summoner.profileIconId ?? summoner.profile_icon ?? null,
+    summoner.puuid,
   );
 }
 
 export function getSummoner(): any {
   return db.prepare("SELECT * FROM summoner ORDER BY updated_at DESC LIMIT 1").get();
+}
+
+// Name and icon for whoever played most recently, read out of the stored game.
+// Covers databases built purely from an import, where the client has never
+// connected and the summoner table has no icon.
+function identityFromLatestGame(): { name: string | null; icon: number | null } {
+  const row = db
+    .prepare(
+      "SELECT puuid, raw_json FROM games WHERE raw_json IS NOT NULL ORDER BY game_creation DESC LIMIT 1",
+    )
+    .get() as { puuid: string; raw_json: string } | undefined;
+  if (!row) return { name: null, icon: null };
+  try {
+    const raw = JSON.parse(row.raw_json);
+    const player = (raw.participantIdentities || []).find(
+      (pi: any) => pi.player?.puuid === row.puuid,
+    )?.player;
+    if (!player) return { name: null, icon: null };
+    const gameName = player.gameName || player.summonerName || null;
+    return {
+      name: gameName && player.tagLine ? `${gameName}#${player.tagLine}` : gameName,
+      icon:
+        typeof player.profileIcon === "number" && player.profileIcon > 0
+          ? player.profileIcon
+          : null,
+    };
+  } catch {
+    return { name: null, icon: null };
+  }
+}
+
+export function getProfile(): { name: string | null; profileIcon: number | null } {
+  const s = getSummoner();
+  const name = s?.game_name ? (s.tag_line ? `${s.game_name}#${s.tag_line}` : s.game_name) : null;
+  const icon = s?.profile_icon ?? null;
+  if (name && icon != null) return { name, profileIcon: icon };
+
+  const fallback = identityFromLatestGame();
+  return { name: name ?? fallback.name, profileIcon: icon ?? fallback.icon };
 }
 
 export function getAllPuuids(): string[] {

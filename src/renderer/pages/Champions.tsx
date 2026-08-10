@@ -19,10 +19,15 @@ type SortKey =
   | "avg_deaths"
   | "avg_assists"
   | "kda"
+  | "avg_score"
+  | "badges"
   | "avg_damage"
   | "avg_gold"
   | "multikills";
 type SortDir = "asc" | "desc";
+
+// Table columns, for the expanded row's colSpan
+const COLUMN_COUNT = 13;
 
 function ChampionExpanded({
   championId,
@@ -48,7 +53,7 @@ function ChampionExpanded({
 
   if (!augStats || !itemStats || !matches) {
     return (
-      <td colSpan={11} className="px-4 py-4">
+      <td colSpan={COLUMN_COUNT} className="px-4 py-4">
         <div className="text-sm text-lol-text text-center">Loading...</div>
       </td>
     );
@@ -201,6 +206,13 @@ export default function Champions() {
       } else if (sortKey === "kda") {
         av = a.deaths > 0 ? (a.kills + a.assists) / a.deaths : Infinity;
         bv = b.deaths > 0 ? (b.kills + b.assists) / b.deaths : Infinity;
+      } else if (sortKey === "badges") {
+        av = a.mvps + a.aces;
+        bv = b.mvps + b.aces;
+      } else if (sortKey === "avg_score") {
+        // Champions with no scored games sort below every scored one
+        av = a.avg_score ?? -1;
+        bv = b.avg_score ?? -1;
       } else {
         av = (a as any)[sortKey];
         bv = (b as any)[sortKey];
@@ -225,7 +237,7 @@ export default function Champions() {
   );
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="max-w-6xl space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-lol-text-bright">Champions</h1>
         <div className="flex items-center gap-2">
@@ -278,6 +290,8 @@ export default function Champions() {
               <SortHeader label="Avg D" field="avg_deaths" />
               <SortHeader label="Avg A" field="avg_assists" />
               <SortHeader label="KDA" field="kda" />
+              <SortHeader label="Score" field="avg_score" />
+              <SortHeader label="MVP / ACE" field="badges" />
               <SortHeader label="Avg Dmg" field="avg_damage" />
               <SortHeader label="Avg Gold" field="avg_gold" />
               <SortHeader label="Multikills" field="multikills" />
@@ -312,6 +326,22 @@ export default function Champions() {
                     className={`px-3 py-2 text-sm ${kdaColor(c.deaths > 0 ? (c.kills + c.assists) / c.deaths : Infinity)}`}
                   >
                     {kdaRatio(c.kills, c.deaths, c.assists)}
+                  </td>
+                  <td
+                    className={`px-3 py-2 text-sm font-semibold ${
+                      c.avg_score != null ? scoreColor(c.avg_score) : "text-lol-text"
+                    }`}
+                  >
+                    {c.avg_score != null ? c.avg_score.toFixed(1) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-sm">
+                    <span className={c.mvps > 0 ? "text-amber-300" : "text-lol-text/40"}>
+                      {c.mvps}
+                    </span>
+                    <span className="text-lol-text/40"> / </span>
+                    <span className={c.aces > 0 ? "text-purple-400" : "text-lol-text/40"}>
+                      {c.aces}
+                    </span>
                   </td>
                   <td className="px-3 py-2 text-sm text-lol-text">
                     {(c.avg_damage ?? 0).toLocaleString()}

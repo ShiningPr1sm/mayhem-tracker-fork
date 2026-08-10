@@ -89,6 +89,8 @@ const api = {
 
   getAllSummonerPuuids: () => ipcRenderer.invoke("db:all-summoner-puuids"),
 
+  getProfile: () => ipcRenderer.invoke("db:profile"),
+
   onStatusChanged: (callback: (status: string) => void) => {
     const handler = (_event: any, status: string) => callback(status);
     ipcRenderer.on("lcu:status-changed", handler);

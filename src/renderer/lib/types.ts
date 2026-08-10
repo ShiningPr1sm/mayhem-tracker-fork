@@ -115,6 +115,10 @@ export interface ChampionStats {
   avg_assists: number;
   avg_damage: number;
   avg_gold: number;
+  // Null when none of the champion's games have a stored score
+  avg_score: number | null;
+  mvps: number;
+  aces: number;
   double_kills: number;
   triple_kills: number;
   quadra_kills: number;
@@ -146,6 +150,14 @@ export interface DashboardData {
   totalKills: number;
   totalDeaths: number;
   totalAssists: number;
+  avgScore: number | null;
+  mvps: number;
+  aces: number;
+  // MVP is only awarded on a win and ACE only on a loss, so those are the
+  // denominators for their rates — and only over games that have a score at all
+  scoredWins: number;
+  scoredLosses: number;
+  // Newest first
   recentForm: { win: number; game_id: number }[];
   topChampions: ChampionStats[];
   multikills: {
@@ -354,6 +366,7 @@ export interface ElectronAPI {
   ) => Promise<GlobalChampionDetail>;
   getSummonerPuuid: () => Promise<string | null>;
   getAllSummonerPuuids: () => Promise<string[]>;
+  getProfile: () => Promise<{ name: string | null; profileIcon: number | null }>;
   refreshGames: () => Promise<{ newGames: number; totalGames: number } | { error: string }>;
   backfillHistory: () => Promise<BackfillResult | { error: string }>;
   cancelBackfill: () => Promise<void>;

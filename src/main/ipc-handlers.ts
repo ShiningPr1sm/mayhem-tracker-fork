@@ -154,6 +154,10 @@ export function registerIpcHandlers(win: BrowserWindow) {
     return s?.puuid ?? null;
   });
 
+  ipcMain.handle("db:profile", () => {
+    return db.getProfile();
+  });
+
   // Settings
   ipcMain.handle("settings:get", (_event, key: string) => {
     return db.getSetting(key);
