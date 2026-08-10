@@ -520,8 +520,11 @@ function ProfileCard({
           <div className="text-sm font-bold text-lol-text-bright truncate">
             {profile?.name ?? "Summoner"}
           </div>
+          {/* The totals below pool every tracked account, so say when the name
+              above only accounts for part of them */}
           <div className="text-[11px] text-lol-text truncate">
             {dashboard.totalGames} {dashboard.totalGames === 1 ? "game" : "games"}
+            {dashboard.accounts > 1 && ` · ${dashboard.accounts} accounts`}
           </div>
         </div>
       </div>

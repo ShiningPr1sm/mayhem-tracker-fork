@@ -157,6 +157,8 @@ export interface DashboardData {
   // denominators for their rates — and only over games that have a score at all
   scoredWins: number;
   scoredLosses: number;
+  // Tracked accounts these totals pool together, under the current filters
+  accounts: number;
   // Newest first
   recentForm: { win: number; game_id: number }[];
   topChampions: ChampionStats[];

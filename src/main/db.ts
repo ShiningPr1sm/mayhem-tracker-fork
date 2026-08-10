@@ -694,7 +694,10 @@ export function getDashboardData(filters?: {
            SUM(CASE WHEN ps.score_badge = 'MVP' THEN 1 ELSE 0 END) as mvps,
            SUM(CASE WHEN ps.score_badge = 'ACE' THEN 1 ELSE 0 END) as aces,
            SUM(CASE WHEN ps.score IS NOT NULL AND ps.win = 1 THEN 1 ELSE 0 END) as scoredWins,
-           SUM(CASE WHEN ps.score IS NOT NULL AND ps.win = 0 THEN 1 ELSE 0 END) as scoredLosses
+           SUM(CASE WHEN ps.score IS NOT NULL AND ps.win = 0 THEN 1 ELSE 0 END) as scoredLosses,
+           -- Every total here pools all tracked accounts; games whose owner was
+           -- never resolved carry an empty puuid and aren't an account
+           COUNT(DISTINCT NULLIF(g.puuid, '')) as accounts
     FROM player_stats ps
     JOIN games g ON ps.game_id = g.game_id
     ${whereSql}
@@ -754,6 +757,7 @@ export function getDashboardData(filters?: {
     aces: totals.aces ?? 0,
     scoredWins: totals.scoredWins ?? 0,
     scoredLosses: totals.scoredLosses ?? 0,
+    accounts: totals.accounts ?? 0,
     recentForm,
     topChampions,
     multikills: {
@@ -1022,20 +1026,18 @@ export function getSummoner(): any {
   return db.prepare("SELECT * FROM summoner ORDER BY updated_at DESC LIMIT 1").get();
 }
 
-// Name and icon for whoever played most recently, read out of the stored game.
-// Covers databases built purely from an import, where the client has never
-// connected and the summoner table has no icon.
-function identityFromLatestGame(): { name: string | null; icon: number | null } {
-  const row = db
-    .prepare(
-      "SELECT puuid, raw_json FROM games WHERE raw_json IS NOT NULL ORDER BY game_creation DESC LIMIT 1",
-    )
-    .get() as { puuid: string; raw_json: string } | undefined;
-  if (!row) return { name: null, icon: null };
+// One account's name and icon as that game recorded them. Covers databases
+// built purely from an import, where the client has never connected and the
+// summoner table has no icon.
+function identityFromGame(
+  rawJson: string | null,
+  puuid: string,
+): { name: string | null; icon: number | null } {
+  if (!rawJson) return { name: null, icon: null };
   try {
-    const raw = JSON.parse(row.raw_json);
+    const raw = JSON.parse(rawJson);
     const player = (raw.participantIdentities || []).find(
-      (pi: any) => pi.player?.puuid === row.puuid,
+      (pi: any) => pi.player?.puuid === puuid,
     )?.player;
     if (!player) return { name: null, icon: null };
     const gameName = player.gameName || player.summonerName || null;
@@ -1051,13 +1053,36 @@ function identityFromLatestGame(): { name: string | null; icon: number | null } 
   }
 }
 
+// The header names whichever account played most recently, so its name and icon
+// always come from the same place. Keying off the summoner table's updated_at
+// instead would name the account the client last synced — which need not be the
+// one that played, and which repairPuuids rewrites for every account at once.
 export function getProfile(): { name: string | null; profileIcon: number | null } {
-  const s = getSummoner();
-  const name = s?.game_name ? (s.tag_line ? `${s.game_name}#${s.tag_line}` : s.game_name) : null;
-  const icon = s?.profile_icon ?? null;
+  const latest = db
+    .prepare(
+      "SELECT puuid, raw_json FROM games WHERE puuid != '' ORDER BY game_creation DESC LIMIT 1",
+    )
+    .get() as { puuid: string; raw_json: string | null } | undefined;
+
+  // No games yet — the client is the only thing that knows who we are
+  const row = latest
+    ? (db.prepare("SELECT * FROM summoner WHERE puuid = ?").get(latest.puuid) as any)
+    : getSummoner();
+
+  const name = row?.game_name
+    ? row.tag_line
+      ? `${row.game_name}#${row.tag_line}`
+      : row.game_name
+    : null;
+  const icon = row?.profile_icon ?? null;
   if (name && icon != null) return { name, profileIcon: icon };
 
-  const fallback = identityFromLatestGame();
+  // profile_icon only fills in once the client has synced this account, and an
+  // imported game may have no summoner row at all — read both off the game
+  // itself, still the same account.
+  const fallback = latest
+    ? identityFromGame(latest.raw_json, latest.puuid)
+    : { name: null, icon: null };
   return { name: name ?? fallback.name, profileIcon: icon ?? fallback.icon };
 }
 
