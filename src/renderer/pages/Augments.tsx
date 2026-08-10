@@ -140,7 +140,7 @@ export default function Augments() {
   );
 
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="max-w-7xl space-y-4">
       <h1 className="text-xl font-bold text-lol-text-bright">Augments</h1>
 
       {/* Rarity Filter + Search */}
