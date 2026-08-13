@@ -574,7 +574,7 @@ export function getMatchHistory(
     .all(...params, limit, offset);
   const matches = rows.map((row: any) => {
     const maxStats = extractGameMaxStats(row.raw_json);
-    const { raw_json, ...match } = row;
+    const { raw_json: _raw_json, ...match } = row;
     return { ...match, ...maxStats };
   });
   return { matches, total: total.count };
@@ -940,7 +940,7 @@ export function getChampionMatchHistory(
     .all(...params, limit, offset);
   const matches = rows.map((row: any) => {
     const maxStats = extractGameMaxStats(row.raw_json);
-    const { raw_json, ...match } = row;
+    const { raw_json: _raw_json, ...match } = row;
     return { ...match, ...maxStats };
   });
   return { matches, total: total.count };
@@ -1442,7 +1442,7 @@ export function getTeammateDetail(key: string): { player: any; matches: any[] } 
     champ.assists += s.assists ?? 0;
 
     const maxStats = extractGameMaxStats(row.raw_json);
-    const { raw_json, ...rest } = row;
+    const { raw_json: _raw_json, ...rest } = row;
     matches.push({
       ...rest,
       ...maxStats,

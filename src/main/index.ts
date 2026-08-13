@@ -123,6 +123,10 @@ function createTray() {
 }
 
 app.whenReady().then(async () => {
+  // Windows groups taskbar entries and attributes notifications by this id;
+  // without it the app is identified by the Electron executable instead.
+  app.setAppUserModelId("com.mayhem-tracker.app");
+
   // Before any window exists, so no web contents escapes the policy
   applySecurityPolicy();
 
@@ -170,11 +174,11 @@ app.on("will-quit", () => {
   closeDatabase();
 });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    // Don't quit — we have the tray
-  }
-});
+// Registering this at all is what keeps the app alive once the window closes —
+// the default behaviour is to quit. Closing the window means minimise to tray;
+// leaving for good goes through the tray's Quit. The empty body is the point,
+// and it applies on every platform, so there is no darwin check to make.
+app.on("window-all-closed", () => {});
 
 app.on("activate", () => {
   if (mainWindow === null) {

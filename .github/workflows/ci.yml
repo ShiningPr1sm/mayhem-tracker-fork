@@ -1,0 +1,41 @@
+name: CI
+
+# Pull requests only. Pushes to main deliberately run nothing — releases are
+# cut by tag, and release.yml runs these same checks before it builds.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Matches the release job's platform: Windows is the only build target, and
+    # a check that passes here is a check that passes where the app ships.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format
+        run: npm run format:check
+
+      # electron-vite does not typecheck, so this catches what tsc cannot:
+      # anything that only fails once the bundler resolves it.
+      - name: Build
+        run: npm run build

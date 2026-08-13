@@ -32,6 +32,17 @@ jobs:
 
       - run: npm ci
 
+      # Before the slow steps, so a release that would not compile fails in
+      # under a minute rather than after packaging
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format
+        run: npm run format:check
+
       - name: Rebuild native modules for Electron
         run: npm run rebuild
 

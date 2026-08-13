@@ -25,6 +25,15 @@ npm run rebuild   # rebuild native modules for Electron
 npm run dev       # start in dev mode
 ```
 
+These run on pull requests, again before a tagged release, and locally via
+`preversion` — so `npm version` will not tag a tree that fails them:
+
+```bash
+npm run typecheck
+npm run lint
+npm run format    # rewrites in place; format:check only reports
+```
+
 ## Build
 
 ```bash

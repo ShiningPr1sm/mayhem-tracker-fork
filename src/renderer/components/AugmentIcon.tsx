@@ -1,4 +1,4 @@
-import { useAugmentData, getAugmentName } from "../hooks/useChampions";
+import { useAugmentData } from "../hooks/useChampions";
 import { AUGMENT_ICON_BASE } from "../lib/constants";
 
 interface AugmentIconProps {
