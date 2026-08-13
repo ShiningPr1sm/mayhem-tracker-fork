@@ -56,6 +56,17 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 
+  // A frameless window carries no menu bar, so Electron's default
+  // View > Toggle Developer Tools accelerator never reaches it. Bind the usual
+  // keys directly instead — in the packaged build too, since a user reporting a
+  // problem needs some way to read the console.
+  mainWindow.webContents.on("before-input-event", (_event, input) => {
+    if (input.type !== "keyDown") return;
+    const toggle =
+      input.key === "F12" || (input.control && input.shift && input.key.toLowerCase() === "i");
+    if (toggle) mainWindow?.webContents.toggleDevTools();
+  });
+
   // Close behavior: minimize to tray (default) or quit
   mainWindow.on("close", (event) => {
     if (!isQuitting) {

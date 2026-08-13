@@ -18,10 +18,10 @@ function stripIconVariant(iconPath: string): string | null {
 }
 
 export default function ItemIcon({ itemId, size = 24, patch }: ItemIconProps) {
-  const itemData = useItemData(patch);
+  const { items, loaded } = useItemData(patch);
   const [attempt, setAttempt] = useState(0);
 
-  const item = itemData[itemId];
+  const item = items[itemId];
   const sources = useMemo(() => {
     const urls: string[] = [];
     if (item?.iconPath) {
@@ -29,9 +29,12 @@ export default function ItemIcon({ itemId, size = 24, patch }: ItemIconProps) {
       const base = stripIconVariant(item.iconPath);
       if (base) urls.push(CDRAGON_ASSET_URL(item.branch, base));
     }
-    urls.push(ITEM_ICON_URL(itemId));
+    // Held back until the lookup has actually resolved. Reaching for the
+    // legacy host while data is still in flight renders a 404 for every item,
+    // which is the broken-icon flash on first opening a match.
+    if (loaded) urls.push(ITEM_ICON_URL(itemId));
     return urls;
-  }, [item?.iconPath, item?.branch, itemId]);
+  }, [item?.iconPath, item?.branch, itemId, loaded]);
 
   useEffect(() => {
     setAttempt(0);

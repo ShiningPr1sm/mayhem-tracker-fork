@@ -134,7 +134,7 @@ function ItemSection({
   games: number;
   patch?: string;
 }) {
-  const itemData = useItemData(patch);
+  const { items: itemData } = useItemData(patch);
   const { sortKey, sortDir, onSort } = useSort("picks");
   const sorted = useMemo(
     () =>

@@ -29,7 +29,10 @@ function isInternalUrl(url: string): boolean {
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (devUrl && url.startsWith(devUrl)) return true;
   try {
-    return new URL(url).protocol === "file:";
+    const { protocol } = new URL(url);
+    // devtools: is Electron's own inspector, which this policy has no business
+    // interfering with; about:blank is the empty document, not a destination.
+    return protocol === "file:" || protocol === "devtools:" || url === "about:blank";
   } catch {
     return false;
   }

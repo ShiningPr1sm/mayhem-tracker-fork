@@ -38,17 +38,25 @@ export function useAugmentData() {
   return data;
 }
 
-// Item data is keyed by patch so icons come from the same patch as the game
-export function useItemData(patch?: string | null) {
+// Item data is keyed by patch so icons come from the same patch as the game.
+// `loaded` matters to callers: a patch that hasn't been fetched yet looks
+// exactly like one CommunityDragon has no entry for, and the two want opposite
+// treatment. A cold patch takes a network round trip in the main process, so
+// the gap is long enough to see.
+export function useItemData(patch?: string | null): { items: ItemData; loaded: boolean } {
   const key = patch || "latest";
-  const [data, setData] = useState<ItemData>(itemCaches.get(key) || {});
+  const [state, setState] = useState<{ items: ItemData; loaded: boolean }>(() => {
+    const cached = itemCaches.get(key);
+    return cached ? { items: cached, loaded: true } : { items: {}, loaded: false };
+  });
 
   useEffect(() => {
     const cached = itemCaches.get(key);
     if (cached && Object.keys(cached).length > 0) {
-      setData(cached);
+      setState({ items: cached, loaded: true });
       return;
     }
+    setState({ items: {}, loaded: false });
     let promise = itemPromises.get(key);
     if (!promise) {
       promise = window.api.getItemData(patch || undefined);
@@ -58,14 +66,16 @@ export function useItemData(patch?: string | null) {
     promise.then((d) => {
       if (Object.keys(d).length > 0) itemCaches.set(key, d);
       else itemPromises.delete(key);
-      if (active) setData(d);
+      // An empty result still counts as loaded — the lookup genuinely failed,
+      // and the legacy icon host is the right fallback for that.
+      if (active) setState({ items: d, loaded: true });
     });
     return () => {
       active = false;
     };
   }, [key]);
 
-  return data;
+  return state;
 }
 
 export function getChampionName(data: ChampionData, id: number): string {
