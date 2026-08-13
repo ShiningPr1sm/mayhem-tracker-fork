@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from "electron";
 import { spawn } from "child_process";
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -14,6 +15,18 @@ export interface UpdateInfo {
   error?: string;
 }
 
+// The expected hash never leaves the main process: the renderer only echoes
+// back an asset URL, so trusting a digest it supplied would verify nothing.
+type CachedAsset = { assetUrl: string; sha256: string | null };
+let lastCheckedAsset: CachedAsset | null = null;
+
+// GitHub reports asset digests as "sha256:<hex>"
+function parseDigest(digest: unknown): string | null {
+  if (typeof digest !== "string") return null;
+  const m = digest.match(/^sha256:([0-9a-f]{64})$/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
 export async function checkForUpdate(): Promise<UpdateInfo> {
   try {
     const res = await fetch("https://api.github.com/repos/Yhprum/mayhem-tracker/releases/latest", {
@@ -24,6 +37,12 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
     const latest = (data.tag_name as string).replace(/^v/, "");
     const current = app.getVersion();
     const asset = (data.assets as any[])?.find((a) => a.name?.endsWith(".exe"));
+    if (asset?.browser_download_url) {
+      lastCheckedAsset = {
+        assetUrl: asset.browser_download_url,
+        sha256: parseDigest(asset.digest),
+      };
+    }
     return {
       hasUpdate: latest !== current,
       latest,
@@ -50,6 +69,16 @@ export async function downloadAndInstall(
     return { success: false, error: "Unexpected download URL" };
   }
 
+  // Re-resolve the release if this URL isn't the one we last saw, so the hash
+  // we check against always comes from GitHub rather than from the caller.
+  if (lastCheckedAsset?.assetUrl !== assetUrl) {
+    await checkForUpdate();
+    if (lastCheckedAsset?.assetUrl !== assetUrl) {
+      return { success: false, error: "That download is no longer the latest release" };
+    }
+  }
+  const expectedSha256 = lastCheckedAsset.sha256;
+
   let tmpDir: string;
   try {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mayhem-update-"));
@@ -66,11 +95,13 @@ export async function downloadAndInstall(
     const total = Number(res.headers.get("content-length")) || 0;
     const out = fs.createWriteStream(newExe);
     const reader = res.body.getReader();
+    const hash = crypto.createHash("sha256");
     let received = 0;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       received += value.length;
+      hash.update(value);
       if (!out.write(Buffer.from(value))) {
         await new Promise((resolve) => out.once("drain", resolve));
       }
@@ -83,7 +114,21 @@ export async function downloadAndInstall(
       out.on("error", reject);
     });
     if (total && received !== total) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
       return { success: false, error: "Download incomplete, please try again" };
+    }
+
+    // A release published before GitHub reported digests has nothing to check
+    // against; HTTPS and the pinned host still stand on their own.
+    if (expectedSha256) {
+      const actual = hash.digest("hex");
+      if (actual !== expectedSha256) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        console.error(`Update hash mismatch: expected ${expectedSha256}, got ${actual}`);
+        return { success: false, error: "Downloaded file failed its integrity check" };
+      }
+    } else {
+      console.warn("Release asset has no digest; skipping hash verification");
     }
   } catch (err: any) {
     fs.rmSync(tmpDir, { recursive: true, force: true });

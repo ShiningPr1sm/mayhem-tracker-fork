@@ -4,6 +4,7 @@ import { initDatabase, closeDatabase, getSetting, checkScoreBackfill } from "./d
 import { registerIpcHandlers } from "./ipc-handlers";
 import { startPolling, stopPolling, getStatus, fetchNewGames } from "./lcu";
 import { loadChampionData, loadAugmentData, waitForChampionData } from "./dragon";
+import { applySecurityPolicy } from "./security";
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -37,7 +38,14 @@ function createWindow() {
     backgroundColor: "#0b0e14",
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
-      sandbox: false,
+      // The preload only touches contextBridge and ipcRenderer, so it runs
+      // fine sandboxed. These are all Electron defaults; stated explicitly so
+      // a future default change can't quietly relax them.
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: false,
+      spellcheck: false,
     },
   });
 
@@ -104,6 +112,9 @@ function createTray() {
 }
 
 app.whenReady().then(async () => {
+  // Before any window exists, so no web contents escapes the policy
+  applySecurityPolicy();
+
   // Initialize database first
   initDatabase();
 

@@ -1,9 +1,16 @@
-import { ipcMain, BrowserWindow, dialog, app, shell } from "electron";
+import { ipcMain, BrowserWindow, dialog, app } from "electron";
 import fs from "fs";
 import * as db from "./db";
 import * as lcu from "./lcu";
 import * as dragon from "./dragon";
 import * as updater from "./updater";
+import { openExternalUrl } from "./security";
+
+// The settings table doubles as internal bookkeeping — sgp_host, the
+// per-account backfill_complete_* flags, score_formula_version — none of which
+// the renderer has any business reading or rewriting. Only the keys backing the
+// Settings page are exposed.
+const RENDERER_SETTINGS = new Set(["minimize_to_tray", "hide_classic_games"]);
 
 export function registerIpcHandlers(win: BrowserWindow) {
   ipcMain.handle(
@@ -160,10 +167,15 @@ export function registerIpcHandlers(win: BrowserWindow) {
 
   // Settings
   ipcMain.handle("settings:get", (_event, key: string) => {
+    if (!RENDERER_SETTINGS.has(key)) return null;
     return db.getSetting(key);
   });
 
   ipcMain.handle("settings:set", (_event, key: string, value: string) => {
+    if (!RENDERER_SETTINGS.has(key)) {
+      console.warn("Refused to write non-renderer setting:", key);
+      return;
+    }
     db.setSetting(key, value);
   });
 
@@ -202,7 +214,7 @@ export function registerIpcHandlers(win: BrowserWindow) {
   });
 
   ipcMain.handle("app:open-url", (_event, url: string) => {
-    shell.openExternal(url);
+    openExternalUrl(url);
   });
 
   // Data export/import
